@@ -1,0 +1,60 @@
+name: pulumi_prod_preview_deploy
+
+# runs whenever a pull request is created against the main branch
+on:
+  pull_request:
+    branches:
+      - main
+
+# permission needed for github token to comment on pull request
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  pulumi_preview:
+    name: Pulumi Preview Deployment
+    runs-on: ubuntu-latest
+    # all the github secrets are referenced using secrets keyword and exported to github runner env
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      # configuring pulumi backend is used to store the state
+      - name: Configure Pulumi Backend
+        run: |
+          pulumi login ${{ secrets.AWS_S3_BUCKET }}
+
+      # select the prod stack if it exists else create a prod stack
+      - name: Select Or Init Prod Stack
+        run: |
+          pulumi stack select prod || pulumi stack init --stack prod --secrets-provider="awskms://${{ secrets.AWS_KMS_KEY_ID }}?region=${{ secrets.AWS_REGION }}"
+
+      # this step is necessary as secretes-provider is not versioned controlled for prod stack
+      # running this step explicitly assigns secretes-provider incase stack already existed in previous step
+      - name: Change Secrets Provider
+        run: |
+          pulumi stack change-secrets-provider "awskms://${{ secrets.AWS_KMS_KEY_ID }}?region=${{ secrets.AWS_REGION }}" --stack prod
+
+      - name: Running Pulumi Preview
+        uses: pulumi/actions@v4
+        with:
+          command: preview
+          stack-name: prod
+          cloud-url: ${{ secrets.AWS_S3_BUCKET }}
+          secrets-provider: "awskms://${{ secrets.AWS_KMS_KEY_ID }}?region=${{ secrets.AWS_REGION }}"
+          comment-on-pr: true
+          diff: true
